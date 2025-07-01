@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Andijon Real Qizlar</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.9.1/firebase-app.js";
+    import { getFirestore, collection, addDoc, getDocs, serverTimestamp, deleteDoc, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/11.9.1/firebase-firestore.js";
+
+    // Firebase konfiguratsiyasi
+    const firebaseConfig = {
+      apiKey: "AIzaSyBkfIrKBDbc6PecP7h1GMjK2taETNk-9R8",
+      authDomain: "anketa-dc510.firebaseapp.com",
+      projectId: "anketa-dc510",
+      storageBucket: "anketa-dc510.appspot.com",
+      messagingSenderId: "915663384561",
+      appId: "1:915663384561:web:135336873ab52b1d1f5e50"
+    };
+
+    // Firebase dasturini ishga tushirish
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    // Admin parolni Firebase'dan olish (admin panel paroli)
+    async function getAdminPassword() {
+      const docSnap = await getDoc(doc(db, "config", "admin"));
+      if (docSnap.exists()) return docSnap.data().password;
+      return "ABC12A"; // Default admin parol
+    }
+
+    // Aloqa uchun maxsus parolni Firebase'dan olish
+    async function getAccessPassword() {
+      const docSnap = await getDoc(doc(db, "config", "weekly"));
+      if (docSnap.exists()) return docSnap.data().parol;
+      return null;
+    }
+
+    // Formani ko'rsatish/yashirish
+    window.toggleForm = () => {
+      if (confirm("❗️Anketani to‘ldirish uchun rozilik bildirasizmi? Bu saytga o‘z xohishingiz bilan kiritilayapsizmi? Hech kim majburlamaydi.")) {
+        document.getElementById("anketa-form-section").classList.toggle("hidden");
+      }
+    };
+
+    // Admin panel: aloqa parolini o'zgartirish
+    window.setAdminParol = async () => {
+      const adminInput = prompt("🛡 Admin parolini kiriting:");
+      const currentAdminParol = await getAdminPassword();
+
+      if (adminInput !== currentAdminParol) {
+        alert("❌ Admin parol noto‘g‘ri!");
+        return;
+      }
+
+      const newParol = prompt("🔐 Yangi aloqa parolini kiriting:");
+      if (!newParol) {
+        alert("❌ Parol bo‘sh bo‘lmasligi kerak!");
+        return;
+      }
+
+      await setDoc(doc(db, "config", "weekly"), { parol: newParol });
+      localStorage.setItem("weekly_parol", newParol);
+      alert("✅ Yangi aloqa paroli o‘rnatildi! Sahifa yangilanadi.");
+      location.reload();
+    };
+
+    // Foydalanuvchi aloqa parolini kiritishi va tekshirish
+    window.askWeeklyAccess = async () => {
+      const savedParol = await getAccessPassword();
+      if (!savedParol) {
+        alert("❌ Aloqa paroli o‘rnatilmagan. Iltimos, admin bilan bog‘laning.");
+        return;
+      }
+
+      const userInput = prompt("🔐 Aloqa uchun parolni kiriting:");
+      if (userInput === savedParol) {
+        localStorage.setItem("weekly_parol", userInput);
+        alert("✅ Parol to‘g‘ri! Aloqa ma’lumotlari ko‘rinadi.");
+        loadAnketalar(true);
+      } else {
+        alert("❌ Parol noto‘g‘ri!");
+      }
+    };
+
+    // Anketani Firebase'ga saqlash
+    window.submitAnketa = async () => {
+      const rasmFile = document.getElementById('rasm').files[0];
+      const izoh = document.getElementById('izoh').value.trim();
+      const telegram = document.getElementById('telegram').value.trim();
+      const phone = document.getElementById('phone').value.trim();
+      const age = document.getElementById('age').value.trim();
+      const height = document.getElementById('height').value.trim();
+      const weight = document.getElementById('weight').value.trim();
+
+      if (!rasmFile || !izoh || !telegram || !phone || !age || !height || !weight) {
+        alert("❗️Barcha maydonlar to‘ldirilishi shart!");
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = async function () {
+        const imageUrl = reader.result;
+        try {
+          await addDoc(collection(db, "anketalar"), {
+            rasm: imageUrl,
+            izoh,
+            telegram,
+            phone,
+            age,
+            height,
+            weight,
+            created_at: serverTimestamp()
+          });
+          alert("✅ Anketa saqlandi!");
+          document.getElementById("anketa-form").reset();
+          document.getElementById("anketa-form-section").classList.add("hidden");
+          loadAnketalar(await checkUserAccess());
+        } catch (err) {
+          alert("❌ Xatolik yuz berdi: " + err.message);
+        }
+      };
+      reader.readAsDataURL(rasmFile);
+    };
+
+    // Anketani o'chirish
+    window.askDelete = async () => {
+      const parol = prompt("🛡 O‘chirish uchun admin parolini kiriting:");
+      const currentParol = await getAdminPassword();
+      if (parol !== currentParol) {
+        alert("❌ Parol noto‘g‘ri!");
+        return;
+      }
+      const id = prompt("🗑 O‘chiriladigan anketaning ID raqamini kiriting:");
+      if (!id) return;
+      try {
+        await deleteDoc(doc(db, "anketalar", id));
+        alert("✅ Anketa o‘chirildi!");
+        loadAnketalar(await checkUserAccess());
+      } catch (err) {
+        alert("❌ Xatolik: " + err.message);
+      }
+    };
+
+    // Foydalanuvchi kiritgan parolni tekshiruvchi funksiya
+    async function checkUserAccess() {
+      const savedParol = await getAccessPassword();
+      const enteredParol = localStorage.getItem("weekly_parol");
+      return (enteredParol === savedParol);
+    }
+
+    // Anketalarni yuklash va ko'rsatish
+    async function loadAnketalar(accessGranted = false) {
+      const container = document.getElementById("anketalar");
+      container.innerHTML = "<p>⏳ Yuklanmoqda...</p>";
+
+      try {
+        const snap = await getDocs(collection(db, "anketalar"));
+        container.innerHTML = "";
+
+        snap.forEach(docu => {
+          const d = docu.data();
+          const card = document.createElement("div");
+          card.className = "glass border border-white/10 p-4 rounded-xl shadow-xl text-white";
+
+          card.innerHTML = `
+            <img src="${d.rasm}" alt="Rasm" class="rounded-xl w-full h-52 object-cover mb-3 hover:scale-105 duration-300" />
+            <p class="font-semibold">📝 Izoh:</p>
+            <div class="bg-white/10 p-2 rounded mb-2 max-h-24 overflow-y-auto whitespace-pre-wrap">${d.izoh}</div>
+            <p><b>📅 Yosh:</b> ${d.age} yosh</p>
+            <p><b>📏 Bo‘yi:</b> ${d.height} sm</p>
+            <p><b>⚖️ Vazni:</b> ${d.weight} kg</p>
+            <div class="mt-2 text-sm">
+              🔒 Aloqa:
+              ${accessGranted
+                ? `<br>✈️ Telegram: <b class='text-green-400'>@${d.telegram}</b><br>📞 Telefon: <b class='text-green-300'>${d.phone}</b>`
+                : '<span class="text-red-300">Yashirin</span>'}
+            </div>
+            <p class="text-xs text-gray-300 mt-2">ID: ${docu.id}</p>
+          `;
+
+          container.appendChild(card);
+        });
+
+        if (!accessGranted) {
+          container.insertAdjacentHTML("afterbegin", `
+            <p class="text-yellow-300 mb-4">
+              🔐 Aloqa ma'lumotlarini ko‘rish uchun <button onclick="askWeeklyAccess()" class="underline text-blue-400">bu yerga bosing</button> va parol kiriting.
+            </p>`);
+        }
+      } catch (err) {
+        container.innerHTML = `<p class="text-red-400">❌ Anketalar yuklanishda xatolik: ${err.message}</p>`;
+      }
+    }
+
+    // Qo'llanma ko'rsatish
+    window.showGuide = () => {
+      alert(`📘 FOYDALANISH QO‘LLANMASI:
+
+1. "📝 Anketa Qo‘shish" tugmasini bosing.
+2. Rozilik bildiring.
+3. Ma’lumotlarni to‘ldiring va saqlang.
+4. "🔑 Aloqa Parol" tugmasidan parol kiriting.
+5. Parol to‘g‘ri bo‘lsa, telegram va telefon ko‘rinadi.
+6. Admin bilan bog‘laning (@eagleasad).`);
+    };
+
+    // Sahifa yuklanganda avtomatik tekshiruv va yuklash
+    window.addEventListener("DOMContentLoaded", async () => {
+      const access = await checkUserAccess();
+      loadAnketalar(access);
+    });
+  </script>
+
+  <style>
+    body {
+      background: url('https://images.unsplash.com/photo-1506765515384-028b60a970df?auto=format&fit=crop&w=1600&q=80');
+      background-size: cover;
+      background-position: center;
+      background-attachment: fixed;
+      color: white;
+      min-height: 100vh;
+      margin: 0;
+      font-family: system-ui, sans-serif;
+    }
+    .glass {
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(12px);
+      transition: all 0.3s ease;
+    }
+    .glass:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 12px 25px rgba(0, 0, 0, 0.2);
+    }
+    @media (max-width: 768px) {
+      #mobile-menu {
+        display: none;
+      }
+      #mobile-menu.open {
+        display: block;
+        position: absolute;
+        top: 60px;
+        left: 0;
+        width: 100%;
+        background: rgba(0, 0, 0, 0.9);
+        z-index: 100;
+      }
+    }
+  </style>
+</head>
+<body class="min-h-screen">
+  <nav class="bg-black/70 p-4 fixed top-0 w-full z-50 shadow-lg flex items-center justify-between">
+    <h1 class="text-xl font-bold text-pink-400">💃 Andijon Real Qizlar</h1>
+    <div class="hidden md:flex gap-3">
+      <button onclick="toggleForm()" class="bg-yellow-500 hover:bg-yellow-600 px-4 py-2 rounded">📝 Anketa Qo‘shish</button>
+      <button onclick="showGuide()" class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded">📘 Qo‘llanma</button>
+      <button onclick="askWeeklyAccess()" class="bg-green-600 hover:bg-green-700 px-4 py-2 rounded">🔑 Aloqa Parol</button>
+      <button onclick="askDelete()" class="bg-red-600 hover:bg-red-700 px-4 py-2 rounded">❌ Anketa O‘chirish</button>
+      <button onclick="setAdminParol()" class="bg-purple-700 hover:bg-purple-800 px-4 py-2 rounded">🛠 Admin panel</button>
+    </div>
+    <div class="md:hidden">
+      <button onclick="document.getElementById('mobile-menu').classList.toggle('open')" class="text-white text-2xl">☰</button>
+    </div>
+  </nav>
+
+  <div id="mobile-menu" class="md:hidden">
+    <div class="flex flex-col p-4 space-y-2">
+      <button onclick="toggleForm();document.getElementById('mobile-menu').classList.remove('open')" class="bg-yellow-500 px-4 py-2 rounded">📝 Anketa Qo‘shish</button>
+      <button onclick="showGuide();document.getElementById('mobile-menu').classList.remove('open')" class="bg-blue-600 px-4 py-2 rounded">📘 Qo‘llanma</button>
+      <button onclick="askWeeklyAccess();document.getElementById('mobile-menu').classList.remove('open')" class="bg-green-600 px-4 py-2 rounded">🔑 Aloqa Parol</button>
+      <button onclick="askDelete();document.getElementById('mobile-menu').classList.remove('open')" class="bg-red-600 px-4 py-2 rounded">❌ Anketa O‘chirish</button>
+      <button onclick="setAdminParol();document.getElementById('mobile-menu').classList.remove('open')" class="bg-purple-700 px-4 py-2 rounded">🛠 Admin panel</button>
+      <button onclick="document.getElementById('mobile-menu').classList.remove('open')" class="text-red-400 mt-2">❌ Yopish</button>
+    </div>
+  </div>
+
+  <main class="pt-24 px-4">
+    <section id="anketa-form-section" class="hidden max-w-xl mx-auto glass p-6 rounded-xl shadow-xl">
+      <form id="anketa-form" class="space-y-4" onsubmit="return false;">
+        <input type="file" id="rasm" accept="image/*" class="w-full p-2 border rounded text-black" />
+        <input type="text" id="telegram" placeholder="@Telegram" class="w-full p-2 border rounded text-black" />
+        <input type="tel" id="phone" placeholder="📞 Telefon raqam" class="w-full p-2 border rounded text-black" />
+        <input type="number" id="age" placeholder="🎂 Yosh" class="w-full p-2 border rounded text-black" />
+        <input type="number" id="height" placeholder="📏 Bo'yingiz (sm)" class="w-full p-2 border rounded text-black" />
+        <input type="number" id="weight" placeholder="⚖️ Vazningiz (kg)" class="w-full p-2 border rounded text-black" />
+        <textarea id="izoh" placeholder="📝 Izoh kiriting..." class="w-full p-2 border rounded text-black resize-none" rows="4"></textarea>
+        <button type="button" onclick="submitAnketa()" class="w-full bg-green-500 hover:bg-green-700 text-white py-2 rounded">✅ Saqlash</button>
+      </form>
+    </section>
+
+    <section id="anketalar" class="max-w-7xl mx-auto grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 mt-12"></section>
+  </main>
+
+  <footer class="bg-black/70 text-center text-white text-sm p-4 mt-12">
+    © 2025 Andijon Real Qizlar | <a href="https://t.me/Andijon_Kvartira_Soatlik_Kunli" target="_blank" class="text-blue-400">Telegram kanalimiz</a>
+    | <a href="https://t.me/@eagleasad" target="_blank" class="text-blue-400">Admin</a>
+  </footer>
+</body>
+</html>
